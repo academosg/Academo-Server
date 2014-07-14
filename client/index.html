@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Academo Room</title>
+		<script src="//ajax.googleapis.com/ajax/libs/jquery/1.9.0/jquery.min.js"></script>
+		
+		<!-- Whiteboard -->
+		<script src="./js/literallycanvas.jquery.js"></script>
+		<link href="./css/literally.css" rel="stylesheet">
+		
+		<!-- Web RTC -->
+		<script src="http://localhost:8888/socket.io.js"></script>
+        <script src="simplewebrtc.bundle.js"></script>
+    		
+		<!-- Random Styling -->
+        <style>
+            .videoContainer {
+                position: relative;
+                width: 200px;
+                height: 150px;
+            }
+            .videoContainer video {
+                position: absolute;
+                width: 100%;
+                height: 100%;
+            }
+            .volume_bar {
+                position: absolute;
+                width: 5px;
+                height: 0px;
+                right: 0px;
+                bottom: 0px;
+                background-color: #12acef;
+            }
+			 * { margin: 0; padding: 0; box-sizing: border-box; }
+			  body { font: 13px Helvetica, Arial; }
+			  #test { background: #000; padding: 3px; position: fixed; bottom: 0; width: 100%; }
+			  #test input { border: 0; padding: 10px; width: 90%; margin-right: .5%; }
+			  #test button { width: 9%; background: rgb(130, 224, 255); border: none; padding: 10px; }
+			  #messages { list-style-type: none; margin: 0; padding: 0; }
+			  #messages li { padding: 5px 10px; }
+			  #messages li:nth-child(odd) { background: #eee; }
+        </style>
+		
+    </head>
+    <body>
+		
+		<div>
+			<!-- Canvas , Video & Button-->
+			<div style='width:70%;display:inline;float:left'>
+				<div class="literally" style='height:500px;width:100%;border-style: solid;border-width: 1px;'>
+					<canvas></canvas>
+				</div>
+				<div id='button_panel' style="height:35px;padding:5px">
+					<button id="screenShareButton"></button>
+					<input id='share_file' type="file" name="img"> 
+					<button id='send_file'>Send To</button>
+					<select id='participant'>
+					</select>
+					<span id='progress'></span>
+					
+				</div>
+				<div id='video_panel' style='margin:auto;text-align: center;min-width: 800px;'>
+					<div class="videoContainer" style='display:inline-block'>
+						<video id="localVideo" style="height: 150px;" oncontextmenu="return false;"></video>
+						<div id="localVolume" class="volume_bar"></div>
+					</div>
+					<div id="remotes" style='display:inline-block'></div>
+				</div>
+			</div>
+			
+			
+			<!-- Chat -->
+			<div style='width:30%;border-style: solid;border-width: 1px;float:right'>
+				<h3>Chatbox</h3>
+				<ul id="messages">
+				</ul>
+				<input id="chat_msg_field" autocomplete="off" />
+				<button id='chat_send_btn'>Send</button>
+				
+			
+			</div>
+		</div>
+
+		<script type="text/javascript">
+		  
+			var webrtc, 					// webrtc
+				room = '123',
+				global_lc; 					// whiteboard
+		  
+			$(document).ready(function() {
+			
+			/* --- Initialization --- */
+			// webrtc connection
+			webrtc = new Academo({
+				localVideoEl: 'localVideo',		// the id/element dom element that will hold "our" video
+				remoteVideosEl: 'remotes',		// the id/element dom element that will hold remote videos
+				autoRequestMedia: true,			// immediately ask for camera access
+				debug: false,
+				detectSpeakingEvents: true,
+				autoAdjustMic: false,
+				session_id: '123',				// this session id should match the one in the database.
+				url: 'http://192.168.0.26:8888'	// socket.io server address
+			});
+			$('#screenShareButton').text('share screen');
+			$('#screenShareButton').click(function () {
+				if (webrtc.getLocalScreen()) {
+					webrtc.stopScreenShare();
+					$('#screenShareButton').text('share screen');
+				} else {
+					webrtc.shareScreen(function (err) {
+						if (err) {
+							$('#screenShareButton').text('share screen');
+						} else {
+							$('#screenShareButton').text('stop sharing');
+						}
+					});
+					
+				}
+            });
+
+			// chat room
+			$('#chat_send_btn').click(function(){
+				if (webrtc.privilege.chat)
+				{
+					var msg = $('#chat_msg_field').val();
+					webrtc.broadcastAll('chat',msg);
+					$('#chat_msg_field').val('');
+				}
+			});
+			  
+			// white board
+			$('.literally').literallycanvas({
+				imageURLPrefix: './img',
+				keyboardShortcuts : false,
+				toolClasses: [LC.PencilWidget, LC.EraserWidget, LC.LineWidget,
+					 LC.RectangleWidget, LC.TextWidget, LC.EyeDropperWidget],
+				onInit: function(lc) {
+					global_lc = lc;
+					lc.on('drawingChange', function(data) {
+						webrtc.broadcastAll('whiteboard',data.shape);
+					});
+				}
+			});
+			
+			/* --- WebRTC Handler --- */
+			 // when it's ready, join if we got a room from the URL
+            webrtc.on('readyToCall', function () {
+                // you can name it anything
+                if (room) webrtc.joinRoom(room);
+            });
+			// when people join the room, write the event on the chatbox
+            webrtc.on('peerAdded', function (peer) {
+				$('#participant').append('<option value="'+peer.id+'">'+peer.name+'</option>')
+				$('#messages').append($('<li>').css('color','green').text(peer.name + ' has joined the room'));
+			});
+			// when people left the room, write the event on the chatbox
+			webrtc.on('peerRemoved', function (peer) {
+				$("#participant option[value='"+peer.id+"']").remove();
+				$('#messages').append($('<li>').css('color','red').text(peer.name + ' has left the room'));
+            });
+			// when user stop sharing the screen
+			webrtc.on('localScreenStopped', function () {
+				$('#screenShareButton').text('share screen');
+			});
+			// when received whiteboard data from other client.
+			webrtc.on('whiteboard', function (data) {
+				shape = data;
+				shape = LC[shape.className].fromJSON(this, shape.data);
+				if (shape)
+				{
+					global_lc.shapes.push(shape);
+					global_lc.repaint();
+				}
+            });
+			// when received chat from other client.
+			webrtc.on('chat', function (data) {
+				if (typeof data == 'string')
+				{
+					$('#messages').append($('<li>').text(data));
+				}
+            });
+			// when received privilege changes from tutor.
+			webrtc.on('privilege', function (data) {
+				if ( ! data ) return;
+				if ( ! data.peer_id ) return;
+				if ( ! data.privilege ) return;
+				if ( ! data.can ) return;
+				
+				switch(data.privilege)
+				{
+					case 'draw' :
+						webrtc.setPrivilege(data.peer_id, data.privilege, data.can);
+						if (webrtc.getSelfId() == data.peer_id)
+						{
+							if (webrtc.privilege.draw)
+							{
+								LC.bindEvents(global_lc, $('canvas'), false);
+								console.log('canvas been binded');
+							}
+							else
+							{
+								$('canvas').off()
+								console.log('canvas been off');
+							}
+						}
+						break;
+					case 'chat' :
+						webrtc.setPrivilege(data.peer_id, data.privilege, data.can);
+						$('#chat_msg_field').prop('disabled', ( ! webrtc.privilege.chat ) );
+						$('#chat_send_btn').prop('disabled', ( ! webrtc.privilege.chat) );
+						webrtc.setPrivilege(data.peer_id, data.privilege, data.can);
+						break;
+					case 'kick' : 
+						if (webrtc.getSelfId() == data.peer_id)
+						{
+							// kick the user out
+							alert('you have been kicked by the tutor.');
+						}
+						break;
+					
+				}
+            });
+			// when received peer to peer data from other user ( this does not go through the server )
+			 webrtc.on('channelMessage', function (peer, channel, data) {
+				switch(channel)
+				{
+					case 'file' :
+						if (data.type == 'check' )
+						{				
+							// if receiving_from is FALSE, pop out a button for otherClient  to choose okay or not
+							if (receiving_flag === false)
+							{
+								// prevent user from sending file that is more than 8 MB.
+								if (data.payload.filesize > 1024*1024*8)
+								{
+									webrtc.sendToPeer(peer.id,'file','can_send',{permission:false,reason:'Filesize cannot be more than 8 MB.'});
+									return;
+								}
+								
+								var choice = confirm(peer.name + " want to send a file with you :\nFilename : "+ data.payload.filename + "\nFilesize : " + formatSizeUnits(data.payload.filesize));
+								if (choice == true)
+								{	
+									// set the receiving_flag to that ID till the file is completed 
+									receiving_flag = peer.id;
+									receiving_filename = data.payload.filename;
+									receiving_filesize = data.payload.filesize;
+									
+									
+									//tell the user to send the file
+									webrtc.sendToPeer(peer.id,'file','can_send',{permission:true,reason:'OK'});
+									
+								}
+								else
+								{
+									//send a message to the user to reject it
+									webrtc.sendToPeer(peer.id,'file','can_send',{permission:false,reason:webrtc.client_name + ' rejected the file.'});
+								}
+							}
+							//  if receiving_from is an ID 
+							else
+							{
+								// indicate the status 
+								webrtc.sendToPeer(peer.id,'file','can_send',{permission:false,reason: webrtc.client_name + ' is currently receiving file from someone.'});
+							}
+							
+						}
+						else if (data.type == 'can_send')
+						{
+							if (sending_flag == peer.id)
+							{
+								if (data.payload.permission)
+								{
+									$('#progress').text(peer.name + ' has accepted the request, starting file transfer ...')
+									var file = document.querySelector('input[type=file]').files[0];
+									var reader = new window.FileReader();
+									reader.readAsDataURL(file);
+									reader.onload = onReadAsDataURL;
+									
+								}
+								else
+								{
+									sending_flag = false;
+									$('#send_file').prop("disabled", false);
+									$('input[type=file]').prop("disabled", false);
+									$('#progress').text('File transfer failed because '+data.payload.reason);
+								}
+							}
+						}
+						else if (data.type == 'receiving')
+						{							
+							if (receiving_flag == peer.id)
+							{	
+								data_chunks.push(data.payload.message); // pushing chunks in array
+								$('#progress').text('Progress : ' + (data.payload.left) + ' left');
+
+								// prevent user from sending data that is larger than the maximun size allowed ( 15000000 )
+								var total_length = 0;
+								for (var i = 0; i < data_chunks.length; i++)
+								{
+									total_length+= data_chunks[i].length;
+								}
+								if (total_length > 15000000)
+								{
+									receiving_flag = false;
+									return;
+								}
+								
+								
+								if (data.payload.last) {
+									saveToDisk(data_chunks.join(''), receiving_filename);
+									data_chunks = []; // resetting array
+									$('#progress').text('');
+									receiving_flag = false;
+								}
+							}
+						}
+						
+						break;
+						
+					default:
+						break;
+						
+				}
+            });
+			// when new video is added ( usually when new user join in the room )
+            webrtc.on('videoAdded', function (video, peer) {
+				$(video).css('z-index',-1);
+                var remotes = $('#remotes');
+                if (remotes) {
+				
+                    var d = $('<div></div>')
+								.addClass('videoContainer')
+								.attr('id', 'container_' + webrtc.getDomId(peer))
+								.css('width', '300px');
+								
+					if (webrtc.client_type == 'tutor')
+					{
+						var btn_disable_draw = $('<button></button>').text(peer.privilege.draw ? 'X Draw' : 'O Draw').css('float','right');
+						var btn_mute = $('<button></button>').text(peer.privilege.chat ? 'X Chat' : 'O Chat').css('float','right');
+						var btn_kick = $('<button></button>').text('Kick').css('float','right');
+						
+						btn_disable_draw.click(function () {
+							if (webrtc.getPrivilege(peer.id,'draw'))
+							{
+								$(this).text('O Draw');
+								broadcastPrivilege(peer.id, 'draw',false);
+								webrtc.setPrivilege(peer.id, 'draw',false);
+							}
+							else
+							{
+								$(this).text('X Draw');
+								broadcastPrivilege(peer.id, 'draw',true);
+								webrtc.setPrivilege(peer.id, 'draw',true);
+							}
+						});
+						btn_mute.click(function () {
+								if (webrtc.getPrivilege(peer.id,'chat'))
+								{
+									$(this).text('O Chat');
+									broadcastPrivilege(peer.id, 'chat',false);
+									webrtc.setPrivilege(peer.id, 'chat',false);
+								}
+								else
+								{
+									$(this).text('X Chat');
+									broadcastPrivilege(peer.id, 'chat',true);
+									webrtc.setPrivilege(peer.id, 'chat',true);
+								}
+							});
+						btn_kick.click(function () {
+							broadcastPrivilege(peer.id, 'kick',false);
+						});
+						
+						d.append($(btn_disable_draw));
+						d.append($(btn_mute));
+						d.append($(btn_kick));
+					}
+					
+					
+					
+                    d.append(video);
+                    var vol = document.createElement('div');
+                    vol.id = 'volume_' + peer.id;
+                    vol.className = 'volume_bar';
+                    video.onclick = function () {
+                        video.style.width = video.videoWidth + 'px';
+                        video.style.height = video.videoHeight + 'px';
+                    };
+                    d.append(vol);
+					
+					
+					
+                    remotes.append(d);
+                }
+            });
+			// when video is removed ( usually when user left the room )
+			webrtc.on('videoRemoved', function (video, peer) {
+                console.log('video removed ', peer);
+                var remotes = document.getElementById('remotes');
+                var el = document.getElementById('container_' + webrtc.getDomId(peer));
+                if (remotes && el) {
+                    remotes.removeChild(el);
+                }
+            });
+			// when people speak with different volumn.
+            webrtc.on('volumeChange', function (volume, treshold) {
+                //console.log('own volume', volume);
+                showVolume(document.getElementById('localVolume'), volume);
+            });
+			
+			
+			/* --- Function --- */
+			// show a volumn indicator at user's camera
+            function showVolume(el, volume) {
+                if (!el) return;
+                if (volume < -45) { // vary between -45 and -20
+                    el.style.height = '0px';
+                } else if (volume > -20) {
+                    el.style.height = '100%';
+                } else {
+                    el.style.height = '' + Math.floor((volume + 100) * 100 / 25 - 220) + '%';
+                }
+            }
+			
+			// change bytes to readible format.
+			function formatSizeUnits(bytes){
+					if      (bytes>=1000000000) {bytes=(bytes/(1024*1024*1024)).toFixed(2)+' GB';}
+					else if (bytes>=1000000)    {bytes=(bytes/(1024*1024)).toFixed(2)+' MB';}
+					else if (bytes>=1000)       {bytes=(bytes/1024).toFixed(2)+' KB';}
+					else if (bytes>1)           {bytes=bytes+' bytes';}
+					else if (bytes==1)          {bytes=bytes+' byte';}
+					else                        {bytes='0 byte';}
+					return bytes;
+			}
+			
+			// broadcast the change privilege to everyone through server.
+			function broadcastPrivilege(peer_id, privilege,can)
+			{
+				if (webrtc.client_type == 'tutor')
+				{
+					data = {
+						peer_id : peer_id,
+						privilege : privilege,
+						can : can
+					}
+					webrtc.broadcastAll('privilege',data);
+					
+				}
+			}
+			
+			
+			
+			/* --- Unsorted things --- */
+			var data_chunks = [];
+			var receiving_filename = '';
+			var receiving_filesize = 0;
+			var chunk_length = 1024 * 1000 ,
+				receiving_flag = false,		// file flags
+				sending_flag = false; 
+ 
+   
+			
+			// File sharing code
+			$('#send_file').click(function () {
+				if (sending_flag === false)
+				{
+					var peer_id = $("#participant option:selected").attr('value');
+					var peer_name = $("#participant option:selected").html();
+					
+					// get file info
+					var file = document.querySelector('input[type=file]').files[0];
+		
+					// send file info
+					if (file)
+					{
+						if (file.size > 1024*1024*8)
+						{
+							alert('Filesize cannot be more than 8 MB.');
+						}
+						else
+						{
+							$('#send_file').prop("disabled", true);
+							$('input[type=file]').prop("disabled", true);
+							sending_flag = peer_id;
+							webrtc.sendToPeer(peer_id,'file','check',{filename : file.name,filesize : file.size}); // this does not go through the server.
+							$('#progress').text('Waiting for ' + peer_name + ' to accept file');
+						}
+					}
+				}
+			});
+			
+			function onReadAsDataURL(event, text) {
+				var data = {}; // data object to transmit over data channel
+				
+				if (event) text = event.target.result; // on first invocation
+				
+				// var size = encodeURI(text).split(/%..|./).length - 1;
+				$('#progress').text('Progress : ' + text.length + ' left');
+				data.left = text.length;
+				
+				if (text.length > chunk_length) {
+					data.message = text.slice(0, chunk_length); // getting chunk using predefined chunk length
+				} else {
+					data.message = text;
+					data.last = true;
+					sending_flag = false;
+					$('#progress').text('');
+					$('#send_file').prop("disabled", false);
+					$('input[type=file]').prop("disabled", false);
+					$('input[type=file]').val('');
+				}
+
+				webrtc.sendToPeer(sending_flag,'file','receiving',data); // use JSON.stringify for chrome!
+
+				var remainingDataURL = text.slice(data.message.length);
+				if (remainingDataURL.length) setTimeout(function () {
+					onReadAsDataURL(null, remainingDataURL); // continue transmitting
+				}, 500)
+			}
+			function saveToDisk(fileUrl, fileName) {
+				var save = document.createElement('a');
+				save.href = fileUrl;
+				save.target = '_blank';
+				save.download = fileName || fileUrl;
+
+				var evt = document.createEvent('MouseEvents');
+				evt.initMouseEvent('click', true, true, window, 1, 0, 0, 0, 0, false, false, false, false, 0, null);
+
+				save.dispatchEvent(evt);
+
+				(window.URL || window.webkitURL).revokeObjectURL(save.href);
+				data_chunks = []; // empty array
+				console.log('saveToDisk End');
+			}
+
+		 });
+
+        </script>
+		
+    </body>
+</html>
